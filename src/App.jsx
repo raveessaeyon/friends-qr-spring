@@ -1,4 +1,4 @@
-import { useMemo, useState, useEffect } from 'react'
+import { useMemo, useRef, useState, useEffect } from 'react'
 
 const builtIn = [
   ['Harijan', 'Commercial Bank', 'commercial', 'harijan qr com bank.jpeg'],
@@ -13,6 +13,22 @@ const builtIn = [
 const storageKey = 'friends-custom-qrs'
 const groupFor = bank => /boc|ceylon/i.test(bank) ? 'boc' : /commercial/i.test(bank) ? 'commercial' : 'other'
 const initials = name => name.split(/\s+/).map(part => part[0]).join('').slice(0, 2).toUpperCase()
+
+function DotBackground({ children, spacing = 24, className = '' }) {
+  const containerRef = useRef(null)
+  const [mousePos, setMousePos] = useState({ x: -100, y: -100 })
+  const handleMouseMove = event => {
+    if (!containerRef.current) return
+    const rect = containerRef.current.getBoundingClientRect()
+    setMousePos({ x: event.clientX - rect.left, y: event.clientY - rect.top })
+  }
+
+  return <div ref={containerRef} onMouseMove={handleMouseMove} className={`dot-background ${className}`}>
+    <div className="dot-grid" style={{ backgroundSize: `${spacing}px ${spacing}px` }} />
+    <div className="dot-highlight" style={{ background: `radial-gradient(220px circle at ${mousePos.x}px ${mousePos.y}px, rgba(16, 185, 129, 0.2), transparent 70%)` }} />
+    <div className="dot-content">{children}</div>
+  </div>
+}
 
 function readCustomQrs() {
   try { return JSON.parse(localStorage.getItem(storageKey) || '[]') } catch { return [] }
@@ -69,7 +85,7 @@ function App() {
 
   const openAdmin = () => isAdmin ? setPage('admin') : setShowLogin(true)
 
-  return <div className={theme === 'light' ? 'app light' : 'app'}>
+  return <DotBackground className={theme === 'light' ? 'app light' : 'app'}>
     <header className="topbar shell">
       <div className="brand">friends<span>✦</span>circle</div>
       <nav className="page-nav" aria-label="Pages">
@@ -94,7 +110,7 @@ function App() {
     {showAdd && <QrFormModal title="Add a friend QR" onClose={() => setShowAdd(false)} onSubmit={event => savePerson(event)} />}
     {editing && <QrFormModal title="Edit QR code" person={editing} onClose={() => setEditing(null)} onSubmit={event => savePerson(event, editing)} />}
     {showLogin && <LoginModal onClose={() => setShowLogin(false)} onSuccess={() => { setIsAdmin(true); setPage('admin'); setShowLogin(false) }} />}
-  </div>
+  </DotBackground>
 }
 
 function imageFor(person) { return person.data || `/assets/${encodeURIComponent(person.file)}` }
