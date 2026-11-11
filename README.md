@@ -1,27 +1,21 @@
 # Friends QR Circle
 
-A small Java web app built with Spring Boot. The page uses a Spring REST endpoint to load the friend and payment QR list. QR images are served from the app's static assets.
-
-## Requirements
-
-- Java 25 (latest LTS) or newer
-- Maven 3.6.3 or newer
+Friends QR Circle is a standalone React + Vite app for browsing and sharing payment QR codes.
 
 ## Run locally
 
-From this folder, run:
-
 ```powershell
-mvn spring-boot:run
+npm install
+npm run dev
 ```
 
-Then open <http://localhost:8080>. The friend list API is at <http://localhost:8080/api/friends>.
+Open the local URL printed by Vite. Production output can be created with `npm run build` and previewed with `npm run preview`.
 
-To make a runnable jar:
+## Docker
 
 ```powershell
-mvn clean package
-java -jar target/friends-qr-0.0.1-SNAPSHOT.jar
+docker build -t friends-qr-circle .
+docker run --rm -p 8080:80 friends-qr-circle
 ```
 
-The friend names and QR file names are listed in `FriendsController.java`. Add or replace QR images under `src/main/resources/static/assets`.
+The app stores newly added QR codes and the theme preference in browser local storage. Built-in QR images are in `public/assets`.
