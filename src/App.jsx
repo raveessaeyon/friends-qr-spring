@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState, useEffect } from 'react'
 
 const builtIn = [
   ['Harijan', 'Commercial Bank', 'commercial', 'harijan qr com bank.jpeg'],
@@ -14,36 +14,93 @@ const storageKey = 'friends-custom-qrs'
 const groupFor = bank => /boc|ceylon/i.test(bank) ? 'boc' : /commercial/i.test(bank) ? 'commercial' : 'other'
 const initials = name => name.split(/\s+/).map(part => part[0]).join('').slice(0, 2).toUpperCase()
 
+function readCustomQrs() {
+  try { return JSON.parse(localStorage.getItem(storageKey) || '[]') } catch { return [] }
+}
+
 function App() {
-  const [people, setPeople] = useState(() => [...builtIn, ...JSON.parse(localStorage.getItem(storageKey) || '[]')])
+  const [people, setPeople] = useState(() => [...builtIn, ...readCustomQrs()])
   const [filter, setFilter] = useState('all')
   const [nameFilter, setNameFilter] = useState('all')
   const [theme, setTheme] = useState(() => localStorage.getItem('friends-theme') || 'dark')
+  const [page, setPage] = useState('viewer')
+  const [isAdmin, setIsAdmin] = useState(false)
   const [selected, setSelected] = useState(null)
+  const [editing, setEditing] = useState(null)
   const [showAdd, setShowAdd] = useState(false)
+  const [showLogin, setShowLogin] = useState(false)
+
   useEffect(() => localStorage.setItem('friends-theme', theme), [theme])
   const names = useMemo(() => [...new Set(people.map(person => person.name))].sort(), [people])
-  const visible = useMemo(() => people.filter(person => (filter === 'all' || person.group === filter) && (nameFilter === 'all' || person.name === nameFilter)).sort((a, b) => a.name.localeCompare(b.name) || a.bank.localeCompare(b.bank)), [people, filter, nameFilter])
-  const addPerson = async event => {
-    event.preventDefault()
-    const form = new FormData(event.currentTarget), qr = form.get('qr')
-    if (!qr?.type?.startsWith('image/')) return
-    const read = file => new Promise(resolve => { if (!file?.size) return resolve(''); const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.readAsDataURL(file) })
-    const person = { name: form.get('name').trim(), bank: form.get('bank').trim(), group: groupFor(form.get('bank')), data: await read(qr), extraData: await read(form.get('extra')), file: qr.name, custom: true }
-    const next = [...people, person]; setPeople(next); localStorage.setItem(storageKey, JSON.stringify(next.filter(item => item.custom))); setShowAdd(false)
+  const visible = useMemo(() => people
+    .filter(person => (filter === 'all' || person.group === filter) && (nameFilter === 'all' || person.name === nameFilter))
+    .sort((a, b) => a.name.localeCompare(b.name) || a.bank.localeCompare(b.bank)), [people, filter, nameFilter])
+
+  const persistCustom = next => {
+    setPeople(next)
+    localStorage.setItem(storageKey, JSON.stringify(next.filter(item => item.custom)))
   }
+
+  const savePerson = async (event, original = null) => {
+    event.preventDefault()
+    const form = new FormData(event.currentTarget)
+    const qr = form.get('qr')
+    const read = file => new Promise(resolve => {
+      if (!file?.size) return resolve(original?.data || '')
+      const reader = new FileReader()
+      reader.onload = () => resolve(reader.result)
+      reader.readAsDataURL(file)
+    })
+    const person = {
+      name: form.get('name').trim(), bank: form.get('bank').trim(), group: groupFor(form.get('bank')),
+      data: await read(qr), extraData: await (async file => file?.size ? read(file) : (original?.extraData || ''))(form.get('extra')), file: qr?.name || original?.file,
+      custom: true,
+    }
+    const next = original ? people.map(item => item === original ? person : item) : [...people, person]
+    persistCustom(next)
+    setShowAdd(false)
+    setEditing(null)
+  }
+
+  const deletePerson = person => {
+    if (!person.custom || !window.confirm(`Remove ${person.name}'s QR code?`)) return
+    persistCustom(people.filter(item => item !== person))
+  }
+
+  const openAdmin = () => isAdmin ? setPage('admin') : setShowLogin(true)
+
   return <div className={theme === 'light' ? 'app light' : 'app'}>
-    <header className="topbar shell"><div className="brand">friends<span>✦</span>circle</div><div className="top-actions"><span className="top-note">A little space to connect and support</span><button className="icon-btn" onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')}>☼ {theme === 'light' ? 'Dark' : 'Light'} mode</button><button className="btn primary" onClick={() => setShowAdd(true)}>＋ Add QR</button></div></header>
-    <section className="hero shell"><div><div className="eyebrow">Good friends, all in one place</div><h1>Send a little<br />support.</h1><p>Find a friend, choose their payment QR, and scan it with your banking app. Add a new QR in seconds with the button above.</p></div><div className="hero-card"><span className="eyebrow">Your circle</span><strong>Small gestures mean a lot.</strong><small>Simple, warm, and made for your people.</small></div></section>
+    <header className="topbar shell">
+      <div className="brand">friends<span>✦</span>circle</div>
+      <nav className="page-nav" aria-label="Pages">
+        <button className={page === 'viewer' ? 'nav-link active' : 'nav-link'} onClick={() => setPage('viewer')}>Viewer page</button>
+        <button className={page === 'admin' && isAdmin ? 'nav-link active' : 'nav-link'} onClick={openAdmin}>Admin page</button>
+      </nav>
+      <div className="top-actions">
+        <span className="top-note">{isAdmin ? 'Admin: mee' : 'Read-only viewer'}</span>
+        <button className="icon-btn" onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')}>☼ {theme === 'light' ? 'Dark' : 'Light'} mode</button>
+        {isAdmin && <button className="btn quiet" onClick={() => { setIsAdmin(false); setPage('viewer') }}>Sign out</button>}
+        {isAdmin && page === 'admin' && <button className="btn primary" onClick={() => setShowAdd(true)}>＋ Add QR</button>}
+      </div>
+    </header>
+    <section className="hero shell">
+      <div><div className="eyebrow">{page === 'admin' ? 'Admin workspace · mee' : 'Good friends, all in one place'}</div><h1>{page === 'admin' ? <>Manage your<br />circle.</> : <>Send a little<br />support.</>}</h1><p>{page === 'admin' ? 'Only mee can add, edit, or remove QR codes. Everyone else can use the viewer page without changing anything.' : 'Find a friend, choose their payment QR, and scan it with your banking app. This page is view-only.'}</p></div>
+      <div className="hero-card"><span className="eyebrow">{page === 'admin' ? 'Private admin page' : 'Your circle'}</span><strong>{page === 'admin' ? 'You are in control.' : 'Small gestures mean a lot.'}</strong><small>{page === 'admin' ? 'Changes are saved in this browser.' : 'Simple, warm, and made for your people.'}</small></div>
+    </section>
     <div className="controls shell"><div className="count">{visible.length} payment QR{visible.length === 1 ? '' : 's'}</div><div className="filter-area"><div className="filters">{[['all', 'Everyone'], ['boc', 'BOC'], ['commercial', 'Commercial Bank'], ['other', 'Other']].map(([value, label]) => <button key={value} className={filter === value ? 'filter active' : 'filter'} onClick={() => setFilter(value)}>{label}</button>)}</div><div className="filters"><button className={nameFilter === 'all' ? 'filter active' : 'filter'} onClick={() => setNameFilter('all')}>All names</button>{names.map(name => <button key={name} className={nameFilter === name ? 'filter active' : 'filter'} onClick={() => setNameFilter(name)}>{name}</button>)}</div></div></div>
-    <main className="shell grid">{visible.map((person, index) => <PersonCard key={`${person.name}-${person.bank}-${index}`} person={person} onOpen={() => setSelected(person)} />)}</main><footer>Made with care for your circle of friends · New QR entries stay saved in this browser</footer>
-    {selected && <QrModal person={selected} onClose={() => setSelected(null)} />}{showAdd && <AddModal onClose={() => setShowAdd(false)} onSubmit={addPerson} />}
+    <main className="shell grid">{visible.map((person, index) => <PersonCard key={`${person.name}-${person.bank}-${index}`} person={person} canManage={isAdmin && page === 'admin'} onOpen={() => setSelected(person)} onEdit={() => setEditing(person)} onDelete={() => deletePerson(person)} />)}</main>
+    <footer>Made with care for your circle of friends · {isAdmin ? 'Admin changes stay saved in this browser' : 'Viewer access is read-only'}</footer>
+    {selected && <QrModal person={selected} onClose={() => setSelected(null)} />}
+    {showAdd && <QrFormModal title="Add a friend QR" onClose={() => setShowAdd(false)} onSubmit={event => savePerson(event)} />}
+    {editing && <QrFormModal title="Edit QR code" person={editing} onClose={() => setEditing(null)} onSubmit={event => savePerson(event, editing)} />}
+    {showLogin && <LoginModal onClose={() => setShowLogin(false)} onSuccess={() => { setIsAdmin(true); setPage('admin'); setShowLogin(false) }} />}
   </div>
 }
 
 function imageFor(person) { return person.data || `/assets/${encodeURIComponent(person.file)}` }
-function PersonCard({ person, onOpen }) { return <article className="person"><div className="person-top"><div className="avatar">{initials(person.name)}</div><div><h2>{person.name}</h2><div className="sub">{person.bank}</div></div><span className="badge">{person.custom ? 'ADDED' : 'FRIEND'}</span></div><div className="qr-wrap"><img loading="lazy" src={imageFor(person)} alt={`${person.name}'s ${person.bank} QR code`} /></div>{person.extraData && <div className="extra"><img src={person.extraData} alt="" />Additional picture</div>}<div className="actions"><button className="btn primary" onClick={onOpen}>Show QR</button><a className="btn quiet" href={imageFor(person)} download={person.file || `${person.name}-qr.png`}>Save</a></div></article> }
+function PersonCard({ person, canManage, onOpen, onEdit, onDelete }) { return <article className="person"><div className="person-top"><div className="avatar">{initials(person.name)}</div><div><h2>{person.name}</h2><div className="sub">{person.bank}</div></div><span className="badge">{person.custom ? 'ADDED' : 'FRIEND'}</span></div><div className="qr-wrap"><img loading="lazy" src={imageFor(person)} alt={`${person.name}'s ${person.bank} QR code`} /></div>{person.extraData && <div className="extra"><img src={person.extraData} alt="" />Additional picture</div>}<div className="actions"><button className="btn primary" onClick={onOpen}>Show QR</button><a className="btn quiet" href={imageFor(person)} download={person.file || `${person.name}-qr.png`}>Save</a>{canManage && person.custom && <><button className="btn quiet" onClick={onEdit}>Edit</button><button className="btn danger" onClick={onDelete}>Delete</button></>}</div></article> }
 function QrModal({ person, onClose }) { const src = imageFor(person); return <div className="overlay open" onClick={event => event.target === event.currentTarget && onClose()}><div className="modal qr-modal"><div className="modal-head"><strong>{person.name} · {person.bank}</strong><button className="close" onClick={onClose}>×</button></div><img src={src} alt={`${person.name}'s ${person.bank} QR code`} /><a className="btn primary full" href={src} download={person.file || `${person.name}-qr.png`}>Download QR image</a></div></div> }
-function AddModal({ onClose, onSubmit }) { return <div className="overlay open" onClick={event => event.target === event.currentTarget && onClose()}><form className="modal form" onSubmit={onSubmit}><div className="modal-head"><strong>Add a friend QR</strong><button type="button" className="close" onClick={onClose}>×</button></div><label>Name<input name="name" required placeholder="e.g. Sathu" /></label><label>Which bank?<input name="bank" required placeholder="e.g. Bank of Ceylon" /></label><label>QR picture<input name="qr" type="file" accept="image/*" required /></label><label>Additional picture <span>(optional)</span><input name="extra" type="file" accept="image/*" /></label><div className="modal-actions"><button type="button" className="btn quiet" onClick={onClose}>Cancel</button><button className="btn primary">Add to my circle</button></div></form></div> }
+function QrFormModal({ title, person, onClose, onSubmit }) { return <div className="overlay open" onClick={event => event.target === event.currentTarget && onClose()}><form className="modal form" onSubmit={onSubmit}><div className="modal-head"><strong>{title}</strong><button type="button" className="close" onClick={onClose}>×</button></div><label>Name<input name="name" required defaultValue={person?.name || ''} placeholder="e.g. Sathu" /></label><label>Which bank?<input name="bank" required defaultValue={person?.bank || ''} placeholder="e.g. Bank of Ceylon" /></label><label>QR picture<input name="qr" type="file" accept="image/*" required={!person} /></label><label>Additional picture <span>(optional)</span><input name="extra" type="file" accept="image/*" /></label><div className="modal-actions"><button type="button" className="btn quiet" onClick={onClose}>Cancel</button><button className="btn primary">Save QR</button></div></form></div> }
+function LoginModal({ onClose, onSuccess }) { const [name, setName] = useState(''); const [error, setError] = useState(''); return <div className="overlay open" onClick={event => event.target === event.currentTarget && onClose()}><form className="modal form" onSubmit={event => { event.preventDefault(); if (name.trim().toLowerCase() === 'mee') onSuccess(); else setError('Only the admin account “mee” can open this page.') }}><div className="modal-head"><strong>Admin sign in</strong><button type="button" className="close" onClick={onClose}>×</button></div><p className="modal-copy">Enter the admin name to manage QR codes.</p><label>Admin name<input autoFocus value={name} onChange={event => setName(event.target.value)} placeholder="mee" required /></label>{error && <div className="form-error">{error}</div>}<div className="modal-actions"><button type="button" className="btn quiet" onClick={onClose}>Cancel</button><button className="btn primary">Open admin page</button></div></form></div> }
 
 export default App
