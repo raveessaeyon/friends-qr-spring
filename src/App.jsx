@@ -3,6 +3,8 @@ import { motion } from 'framer-motion'
 import { ArrowRight, CheckCircle, DownloadSimple, Eye, MoonStars, PencilSimple, Plus, QrCode, ShieldCheck, SignOut, Sun, Trash, X } from '@phosphor-icons/react'
 import { clsx } from 'clsx'
 import { twMerge } from 'tailwind-merge'
+import AuthPage from './AuthPage'
+import { supabase } from './lib/supabase'
 
 const cn = (...inputs) => twMerge(clsx(inputs))
 
@@ -48,6 +50,8 @@ function readCustomQrs() {
 }
 
 function App() {
+  const [session, setSession] = useState(null)
+  const [authReady, setAuthReady] = useState(false)
   const [people, setPeople] = useState(() => [...builtIn, ...readCustomQrs()])
   const [filter, setFilter] = useState('all')
   const [nameFilter, setNameFilter] = useState('all')
@@ -59,6 +63,13 @@ function App() {
   const [showAdd, setShowAdd] = useState(false)
   const [showLogin, setShowLogin] = useState(false)
 
+  useEffect(() => {
+    if (!supabase) { setAuthReady(true); return undefined }
+    let active = true
+    supabase.auth.getSession().then(({ data }) => { if (active) { setSession(data.session); setAuthReady(true) } })
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, nextSession) => setSession(nextSession))
+    return () => { active = false; listener.subscription.unsubscribe() }
+  }, [])
   useEffect(() => localStorage.setItem('friends-theme', theme), [theme])
   const names = useMemo(() => [...new Set(people.map(person => person.name))].sort(), [people])
   const visible = useMemo(() => people
@@ -98,6 +109,9 @@ function App() {
 
   const openAdmin = () => isAdmin ? setPage('admin') : setShowLogin(true)
 
+  if (!authReady) return <div className="auth-loading">Loading your secure circle…</div>
+  if (!session) return <AuthPage />
+
   return <DotBackground className={theme === 'light' ? 'app light' : 'app'}>
     <header className="topbar shell">
       <div className="brand">friends<span>✦</span>circle</div>
@@ -108,7 +122,7 @@ function App() {
       <div className="top-actions">
         <span className="top-note">{isAdmin ? <><ShieldCheck size={15} /> Admin: mee</> : <><Eye size={15} /> Read-only viewer</>}</span>
         <button className="icon-btn" onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')}>{theme === 'light' ? <MoonStars size={15} /> : <Sun size={15} />} {theme === 'light' ? 'Dark' : 'Light'} mode</button>
-        {isAdmin && <button className="btn quiet" onClick={() => { setIsAdmin(false); setPage('viewer') }}><SignOut size={16} /> Sign out</button>}
+        {session && <button className="btn quiet" onClick={async () => { setIsAdmin(false); setPage('viewer'); await supabase?.auth.signOut() }}><SignOut size={16} /> Sign out</button>}
         {isAdmin && page === 'admin' && <button className="btn primary" onClick={() => setShowAdd(true)}><Plus size={17} weight="bold" /> Add QR</button>}
       </div>
     </header>
