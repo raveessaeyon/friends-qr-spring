@@ -2,6 +2,3 @@ node_modules/
 dist/
 target/
 .idea/
-.env
-.env.*
-!.env.example
