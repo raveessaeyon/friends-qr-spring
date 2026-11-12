@@ -3,9 +3,58 @@ import { motion } from 'framer-motion'
 import { ArrowRight, Bank, CaretDown, CheckCircle, DownloadSimple, Eye, MoonStars, PencilSimple, Plus, QrCode, ShieldCheck, SignOut, Sun, Trash, UserCircle, X } from '@phosphor-icons/react'
 import { clsx } from 'clsx'
 import { twMerge } from 'tailwind-merge'
-import { qrBucket, supabase } from './lib/supabase'
 
 const cn = (...inputs) => twMerge(clsx(inputs))
+
+function KineticFlowField({ particleCount = 1000, fieldScale = 0.002 }) {
+  const canvasRef = useRef(null)
+
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas) return undefined
+    const context = canvas.getContext('2d')
+    const particles = Array.from({ length: particleCount }, () => ({ x: Math.random(), y: Math.random(), life: Math.random() }))
+    let frameId
+    let width = 0
+    let height = 0
+    let pixelRatio = 1
+    const resize = () => {
+      const rect = canvas.getBoundingClientRect()
+      pixelRatio = Math.min(window.devicePixelRatio || 1, 2)
+      width = rect.width; height = rect.height
+      canvas.width = width * pixelRatio; canvas.height = height * pixelRatio
+      context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0)
+    }
+    const animate = time => {
+      context.clearRect(0, 0, width, height)
+      const t = time * 0.00018
+      for (const particle of particles) {
+        const x = particle.x * width
+        const y = particle.y * height
+        const field = Math.sin((x + t * 900) * fieldScale) + Math.cos((y - t * 650) * fieldScale)
+        const angle = field * Math.PI * 1.8 + Math.sin((y - x) * fieldScale) * .7
+        const speed = 0.00055 + Math.abs(Math.sin(field)) * .0005
+        const nextX = particle.x + Math.cos(angle) * speed
+        const nextY = particle.y + Math.sin(angle) * speed
+        context.beginPath()
+        context.moveTo(x, y)
+        context.lineTo(nextX * width, nextY * height)
+        context.strokeStyle = `hsla(${155 + field * 28}, 90%, 70%, ${.13 + Math.abs(field) * .07})`
+        context.lineWidth = .65
+        context.stroke()
+        particle.x = nextX < 0 ? 1 : nextX > 1 ? 0 : nextX
+        particle.y = nextY < 0 ? 1 : nextY > 1 ? 0 : nextY
+      }
+      frameId = requestAnimationFrame(animate)
+    }
+    resize()
+    window.addEventListener('resize', resize)
+    frameId = requestAnimationFrame(animate)
+    return () => { cancelAnimationFrame(frameId); window.removeEventListener('resize', resize) }
+  }, [particleCount, fieldScale])
+
+  return <canvas ref={canvasRef} className="kinetic-flow-field" aria-hidden="true" />
+}
 
 function ElectroBorder({ children, effects = true, glow = true, aura = true, borderColor = '#82f4ca', borderWidth = 2, distortion = 1, animationSpeed = 1, glowBlur = 24, className = '' }) {
   const duration = `${Math.max(.2, 1 / animationSpeed)}s`
@@ -27,7 +76,6 @@ const builtIn = [
 const storageKey = 'friends-custom-qrs'
 const groupFor = bank => /boc|ceylon/i.test(bank) ? 'boc' : /commercial/i.test(bank) ? 'commercial' : 'other'
 const initials = name => name.split(/\s+/).map(part => part[0]).join('').slice(0, 2).toUpperCase()
-const dbPerson = row => ({ dbId: row.id, name: row.name, bank: row.bank, group: row.group_name, qrPath: row.qr_path, extraPath: row.extra_path, qrUrl: supabase.storage.from(qrBucket).getPublicUrl(row.qr_path).data.publicUrl, extraUrl: row.extra_path ? supabase.storage.from(qrBucket).getPublicUrl(row.extra_path).data.publicUrl : '', custom: true })
 
 function DotBackground({ children, spacing = 24, className = '' }) {
   const containerRef = useRef(null)
@@ -38,7 +86,9 @@ function DotBackground({ children, spacing = 24, className = '' }) {
     setMousePos({ x: event.clientX - rect.left, y: event.clientY - rect.top })
   }
 
+  const isLight = className.split(/\s+/).includes('light')
   return <div ref={containerRef} onMouseMove={handleMouseMove} className={cn('dot-background', className)}>
+    {!isLight && <KineticFlowField particleCount={1000} fieldScale={0.002} />}
     <div className="dot-grid" style={{ backgroundSize: `${spacing}px ${spacing}px` }} />
     <div className="dot-highlight" style={{ background: `radial-gradient(220px circle at ${mousePos.x}px ${mousePos.y}px, rgba(16, 185, 129, 0.2), transparent 70%)` }} />
     <div className="dot-content">{children}</div>
@@ -63,14 +113,6 @@ function App() {
   const [showLogin, setShowLogin] = useState(false)
 
   useEffect(() => localStorage.setItem('friends-theme', theme), [theme])
-  useEffect(() => {
-    if (!supabase) return undefined
-    let active = true
-    supabase.from('qr_codes').select('*').order('name').order('bank').then(({ data, error }) => {
-      if (active && !error && data) setPeople([...builtIn, ...data.map(dbPerson)])
-    })
-    return () => { active = false }
-  }, [])
   const names = useMemo(() => [...new Set(people.map(person => person.name))].sort(), [people])
   const visible = useMemo(() => people
     .filter(person => (filter === 'all' || person.group === filter) && (nameFilter === 'all' || person.name === nameFilter))
@@ -96,40 +138,14 @@ function App() {
       data: await read(qr), extraData: await (async file => file?.size ? read(file) : (original?.extraData || ''))(form.get('extra')), file: qr?.name || original?.file,
       custom: true,
     }
-    if (supabase) {
-      const safeBase = `${Date.now()}-${person.name}-${person.bank}`.toLowerCase().replace(/[^a-z0-9]+/g, '-')
-      const upload = async (file, oldPath, suffix) => {
-        if (!file?.size) return oldPath || null
-        const path = `${safeBase}-${suffix}-${file.name.replace(/[^a-z0-9.]+/gi, '-')}`
-        const { error } = await supabase.storage.from(qrBucket).upload(path, file, { upsert: true, contentType: file.type })
-        if (error) throw error
-        return path
-      }
-      const qrPath = await upload(qr, original?.qrPath, 'qr')
-      if (!qrPath) throw new Error('Please choose a QR image.')
-      const extraFile = form.get('extra')
-      const extraPath = await upload(extraFile, original?.extraPath, 'extra')
-      const record = { name: person.name, bank: person.bank, group_name: person.group, qr_path: qrPath, extra_path: extraPath }
-      const result = original?.dbId
-        ? await supabase.from('qr_codes').update(record).eq('id', original.dbId).select().single()
-        : await supabase.from('qr_codes').insert(record).select().single()
-      if (result.error) throw result.error
-      person = dbPerson(result.data)
-    }
     const next = original ? people.map(item => item === original ? person : item) : [...people, person]
     persistCustom(next)
     setShowAdd(false)
     setEditing(null)
   }
 
-  const deletePerson = async person => {
+  const deletePerson = person => {
     if (!person.custom || !window.confirm(`Remove ${person.name}'s QR code?`)) return
-    if (supabase && person.dbId) {
-      const { error } = await supabase.from('qr_codes').delete().eq('id', person.dbId)
-      if (error) { window.alert(error.message); return }
-      const paths = [person.qrPath, person.extraPath].filter(Boolean)
-      if (paths.length) await supabase.storage.from(qrBucket).remove(paths)
-    }
     persistCustom(people.filter(item => item !== person))
   }
 
