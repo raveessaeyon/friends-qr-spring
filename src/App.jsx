@@ -125,6 +125,7 @@ function App() {
   const [showAdd, setShowAdd] = useState(false)
   const [showLogin, setShowLogin] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
+  const [schemaError, setSchemaError] = useState(null)
 
   useEffect(() => localStorage.setItem('friends-theme', theme), [theme])
 
@@ -166,7 +167,17 @@ function App() {
         .select('*')
         .order('name')
         .order('bank')
-      if (!error && data) {
+      if (error) {
+        console.error('Supabase load error:', error)
+        if (error.code === 'PGRST205' || error.message?.includes('schema cache')) {
+          setSchemaError('table_missing')
+        } else {
+          setSchemaError(error.message)
+        }
+        return
+      }
+      setSchemaError(null)
+      if (data) {
         setPeople([...builtIn, ...data.map(dbPerson)])
       }
     } catch (err) {
@@ -357,6 +368,13 @@ function App() {
       <div className="shell" style={{ marginBottom: 16 }}>
         <div style={{ background: 'rgba(245, 158, 11, 0.15)', border: '1px solid rgba(245, 158, 11, 0.5)', color: '#fbbf24', borderRadius: 14, padding: '12px 18px', fontSize: 13, lineHeight: 1.5 }}>
           ⚠️ <strong>Local Mode:</strong> <code>VITE_SUPABASE_ANON_KEY</code> is missing in <code>.env</code>. QR codes added right now are only saved on this device. To make newly added QR codes instantly visible to everyone on the web, add your Supabase anon key to <code>.env</code>.
+        </div>
+      </div>
+    )}
+    {schemaError === 'table_missing' && (
+      <div className="shell" style={{ marginBottom: 16 }}>
+        <div style={{ background: 'rgba(239, 68, 68, 0.15)', border: '1px solid rgba(239, 68, 68, 0.5)', color: '#fca5a5', borderRadius: 14, padding: '14px 18px', fontSize: 13, lineHeight: 1.6 }}>
+          ⚠️ <strong>Database Table Not Found:</strong> Supabase is connected, but the <code>qr_codes</code> table has not been created yet in your Supabase project. To make QR codes visible to everyone on the web, go to your <strong>Supabase Dashboard ➔ SQL Editor</strong>, paste the contents of <code>supabase_schema.sql</code>, and click <strong>Run</strong>.
         </div>
       </div>
     )}

@@ -74,4 +74,14 @@ create policy "Demo can delete QR images"
   using (bucket_id = 'qr-images');
 
 -- 7. Enable Realtime updates across all web clients
-alter publication supabase_realtime add table public.qr_codes;
+do $$
+begin
+  if not exists (
+    select 1 from pg_publication_tables 
+    where pubname = 'supabase_realtime' 
+    and schemaname = 'public' 
+    and tablename = 'qr_codes'
+  ) then
+    alter publication supabase_realtime add table public.qr_codes;
+  end if;
+end $$;
