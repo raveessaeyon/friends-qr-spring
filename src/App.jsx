@@ -157,24 +157,45 @@ function App() {
     }
   }, [])
 
-  // Load QR codes from Supabase
+  // Fetch QR codes from Supabase
+  const loadQrCodes = async () => {
+    if (!supabase) return
+    try {
+      const { data, error } = await supabase
+        .from('qr_codes')
+        .select('*')
+        .order('name')
+        .order('bank')
+      if (!error && data) {
+        setPeople([...builtIn, ...data.map(dbPerson)])
+      }
+    } catch (err) {
+      console.error('Supabase load error:', err)
+    }
+  }
+
+  // Load QR codes & subscribe to Realtime changes across all connected devices
   useEffect(() => {
     if (!supabase) return undefined
     let active = true
-    supabase
-      .from('qr_codes')
-      .select('*')
-      .order('name')
-      .order('bank')
-      .then(({ data, error }) => {
-        if (active && !error && data) {
-          setPeople([...builtIn, ...data.map(dbPerson)])
+
+    loadQrCodes()
+
+    const channel = supabase
+      .channel('public:qr_codes')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'qr_codes' },
+        () => {
+          if (active) loadQrCodes()
         }
-      })
-      .catch(err => {
-        console.error('Supabase load error:', err)
-      })
-    return () => { active = false }
+      )
+      .subscribe()
+
+    return () => {
+      active = false
+      supabase.removeChannel(channel)
+    }
   }, [])
 
   const names = useMemo(() => [...new Set(people.map(person => person.name))].sort(), [people])

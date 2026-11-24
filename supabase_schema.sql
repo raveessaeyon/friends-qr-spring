@@ -72,3 +72,6 @@ drop policy if exists "Demo can delete QR images" on storage.objects;
 create policy "Demo can delete QR images"
   on storage.objects for delete
   using (bucket_id = 'qr-images');
+
+-- 7. Enable Realtime updates across all web clients
+alter publication supabase_realtime add table public.qr_codes;
