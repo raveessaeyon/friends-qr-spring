@@ -348,23 +348,28 @@ function App() {
             <SignOut size={16} /> Sign out
           </button>
         )}
-        {isAdmin && page === 'admin' && (
-          <button className="btn primary" onClick={() => setShowAdd(true)}>
-            <Plus size={17} weight="bold" /> Add QR
-          </button>
-        )}
+        <button className="btn primary" onClick={() => setShowAdd(true)}>
+          <Plus size={17} weight="bold" /> Add QR
+        </button>
       </div>
     </header>
+    {!isSupabaseConfigured && (
+      <div className="shell" style={{ marginBottom: 16 }}>
+        <div style={{ background: 'rgba(245, 158, 11, 0.15)', border: '1px solid rgba(245, 158, 11, 0.5)', color: '#fbbf24', borderRadius: 14, padding: '12px 18px', fontSize: 13, lineHeight: 1.5 }}>
+          ⚠️ <strong>Local Mode:</strong> <code>VITE_SUPABASE_ANON_KEY</code> is missing in <code>.env</code>. QR codes added right now are only saved on this device. To make newly added QR codes instantly visible to everyone on the web, add your Supabase anon key to <code>.env</code>.
+        </div>
+      </div>
+    )}
     <motion.section className="hero shell" initial={{ opacity: 0, y: 18 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: .55, ease: 'easeOut' }}>
       <div>
         <div className="eyebrow">{page === 'admin' ? `Admin workspace · ${currentUser?.email || 'admin'}` : 'Good friends, all in one place'}</div>
         <h1>{page === 'admin' ? <>Manage your<br />circle.</> : <>Send a little<br />support.</>}</h1>
-        <p>{page === 'admin' ? `Only signed-in admins (${currentUser?.email || 'admin'}) can add, edit, or remove QR codes. Everyone else can use the viewer page without changing anything.` : 'Find a friend, choose their payment QR, and scan it with your banking app. This page is view-only.'}</p>
+        <p>{page === 'admin' ? `Admin workspace (${currentUser?.email || 'admin'}). You can manage, edit, or remove QR codes.` : 'Anyone can add their payment QR code or find a friend and scan it. All added QR codes are stored in the cloud and visible to everyone across the web.'}</p>
       </div>
       <div className="hero-card">
         <span className="eyebrow">{page === 'admin' ? 'Private admin page' : 'Your circle'}</span>
         <strong>{page === 'admin' ? 'You are in control.' : 'Small gestures mean a lot.'}</strong>
-        <small>{page === 'admin' ? (isSupabaseConfigured ? 'Changes are synced directly with Supabase Database & Storage.' : 'Changes are saved in this browser (Supabase not configured in .env).') : 'Simple, warm, and made for your people.'}</small>
+        <small>{isSupabaseConfigured ? 'Connected to Supabase: All QR codes sync to the cloud and are visible to everyone.' : 'Running in local fallback mode (add .env to sync across all browsers).'}</small>
       </div>
     </motion.section>
     <div className="controls shell">
