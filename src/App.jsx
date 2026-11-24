@@ -3,6 +3,7 @@ import { motion } from 'framer-motion'
 import { ArrowRight, Bank, CaretDown, CheckCircle, DownloadSimple, Eye, MoonStars, PencilSimple, Plus, QrCode, ShieldCheck, SignOut, Sun, Trash, UserCircle, X } from '@phosphor-icons/react'
 import { clsx } from 'clsx'
 import { twMerge } from 'tailwind-merge'
+import { qrBucket, supabase, isSupabaseConfigured } from './lib/supabase'
 
 const cn = (...inputs) => twMerge(clsx(inputs))
 
@@ -76,6 +77,17 @@ const builtIn = [
 const storageKey = 'friends-custom-qrs'
 const groupFor = bank => /boc|ceylon/i.test(bank) ? 'boc' : /commercial/i.test(bank) ? 'commercial' : 'other'
 const initials = name => name.split(/\s+/).map(part => part[0]).join('').slice(0, 2).toUpperCase()
+const dbPerson = row => ({
+  dbId: row.id,
+  name: row.name,
+  bank: row.bank,
+  group: row.group_name,
+  qrPath: row.qr_path,
+  extraPath: row.extra_path,
+  qrUrl: supabase ? supabase.storage.from(qrBucket).getPublicUrl(row.qr_path).data.publicUrl : '',
+  extraUrl: (supabase && row.extra_path) ? supabase.storage.from(qrBucket).getPublicUrl(row.extra_path).data.publicUrl : '',
+  custom: true,
+})
 
 function DotBackground({ children, spacing = 24, className = '' }) {
   const containerRef = useRef(null)
@@ -111,8 +123,29 @@ function App() {
   const [editing, setEditing] = useState(null)
   const [showAdd, setShowAdd] = useState(false)
   const [showLogin, setShowLogin] = useState(false)
+  const [isSaving, setIsSaving] = useState(false)
 
   useEffect(() => localStorage.setItem('friends-theme', theme), [theme])
+
+  useEffect(() => {
+    if (!supabase) return undefined
+    let active = true
+    supabase
+      .from('qr_codes')
+      .select('*')
+      .order('name')
+      .order('bank')
+      .then(({ data, error }) => {
+        if (active && !error && data) {
+          setPeople([...builtIn, ...data.map(dbPerson)])
+        }
+      })
+      .catch(err => {
+        console.error('Supabase load error:', err)
+      })
+    return () => { active = false }
+  }, [])
+
   const names = useMemo(() => [...new Set(people.map(person => person.name))].sort(), [people])
   const visible = useMemo(() => people
     .filter(person => (filter === 'all' || person.group === filter) && (nameFilter === 'all' || person.name === nameFilter))
@@ -134,18 +167,85 @@ function App() {
       reader.readAsDataURL(file)
     })
     let person = {
-      name: form.get('name').trim(), bank: form.get('bank').trim(), group: groupFor(form.get('bank')),
-      data: await read(qr), extraData: await (async file => file?.size ? read(file) : (original?.extraData || ''))(form.get('extra')), file: qr?.name || original?.file,
+      name: form.get('name').trim(),
+      bank: form.get('bank').trim(),
+      group: groupFor(form.get('bank')),
+      data: await read(qr),
+      extraData: await (async file => file?.size ? read(file) : (original?.extraData || ''))(form.get('extra')),
+      file: qr?.name || original?.file,
       custom: true,
     }
+
+    if (supabase) {
+      setIsSaving(true)
+      try {
+        const safeBase = `${Date.now()}-${person.name}-${person.bank}`.toLowerCase().replace(/[^a-z0-9]+/g, '-')
+        const upload = async (file, oldPath, suffix) => {
+          if (!file?.size) return oldPath || null
+          const ext = file.name.split('.').pop() || 'png'
+          const path = `${safeBase}-${suffix}.${ext}`
+          const { error } = await supabase.storage.from(qrBucket).upload(path, file, {
+            upsert: true,
+            contentType: file.type || 'image/png',
+          })
+          if (error) throw error
+          return path
+        }
+
+        const qrPath = await upload(qr, original?.qrPath, 'qr')
+        if (!qrPath) throw new Error('Please choose a QR image.')
+        const extraFile = form.get('extra')
+        const extraPath = await upload(extraFile, original?.extraPath, 'extra')
+        const record = {
+          name: person.name,
+          bank: person.bank,
+          group_name: person.group,
+          qr_path: qrPath,
+          extra_path: extraPath,
+          updated_at: new Date().toISOString(),
+        }
+
+        const result = original?.dbId
+          ? await supabase.from('qr_codes').update(record).eq('id', original.dbId).select().single()
+          : await supabase.from('qr_codes').insert(record).select().single()
+
+        if (result.error) throw result.error
+        person = dbPerson(result.data)
+      } catch (err) {
+        console.error('Supabase save error:', err)
+        alert(`Failed to save to Supabase: ${err.message || err}`)
+        setIsSaving(false)
+        return
+      } finally {
+        setIsSaving(false)
+      }
+    }
+
     const next = original ? people.map(item => item === original ? person : item) : [...people, person]
     persistCustom(next)
     setShowAdd(false)
     setEditing(null)
   }
 
-  const deletePerson = person => {
+  const deletePerson = async person => {
     if (!person.custom || !window.confirm(`Remove ${person.name}'s QR code?`)) return
+    if (supabase && person.dbId) {
+      try {
+        const { error } = await supabase.from('qr_codes').delete().eq('id', person.dbId)
+        if (error) {
+          alert(`Failed to delete from Supabase: ${error.message}`)
+          return
+        }
+        const paths = [person.qrPath, person.extraPath].filter(Boolean)
+        if (paths.length) {
+          await supabase.storage.from(qrBucket).remove(paths)
+        }
+      } catch (err) {
+        console.error('Supabase delete error:', err)
+        alert(`Error deleting from Supabase: ${err.message || err}`)
+        return
+      }
+    }
     persistCustom(people.filter(item => item !== person))
   }
 
@@ -159,6 +259,15 @@ function App() {
         <button className={page === 'admin' && isAdmin ? 'nav-link active' : 'nav-link'} onClick={openAdmin}>Admin page</button>
       </nav>
       <div className="top-actions">
+        {isSupabaseConfigured ? (
+          <span className="top-note" title="Connected to Supabase Database & Storage">
+            <CheckCircle size={15} color="#82f4ca" weight="fill" /> Supabase
+          </span>
+        ) : (
+          <span className="top-note" title="Running in local fallback mode. Add Supabase credentials in .env to sync with cloud database.">
+            <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#f59e0b', display: 'inline-block' }} /> Local mode
+          </span>
+        )}
         <span className="top-note">{isAdmin ? <><ShieldCheck size={15} /> Admin: mee</> : <><Eye size={15} /> Read-only viewer</>}</span>
         <button className="icon-btn" onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')}>{theme === 'light' ? <MoonStars size={15} /> : <Sun size={15} />} {theme === 'light' ? 'Dark' : 'Light'} mode</button>
         {isAdmin && <button className="btn quiet" onClick={() => { setIsAdmin(false); setPage('viewer') }}><SignOut size={16} /> Sign out</button>}
@@ -167,14 +276,14 @@ function App() {
     </header>
     <motion.section className="hero shell" initial={{ opacity: 0, y: 18 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: .55, ease: 'easeOut' }}>
       <div><div className="eyebrow">{page === 'admin' ? 'Admin workspace · username' : 'Good friends, all in one place'}</div><h1>{page === 'admin' ? <>Manage your<br />circle.</> : <>Send a little<br />support.</>}</h1><p>{page === 'admin' ? 'Only mee can add, edit, or remove QR codes. Everyone else can use the viewer page without changing anything.' : 'Find a friend, choose their payment QR, and scan it with your banking app. This page is view-only.'}</p></div>
-      <div className="hero-card"><span className="eyebrow">{page === 'admin' ? 'Private admin page' : 'Your circle'}</span><strong>{page === 'admin' ? 'You are in control.' : 'Small gestures mean a lot.'}</strong><small>{page === 'admin' ? 'Changes are saved in this browser.' : 'Simple, warm, and made for your people.'}</small></div>
+      <div className="hero-card"><span className="eyebrow">{page === 'admin' ? 'Private admin page' : 'Your circle'}</span><strong>{page === 'admin' ? 'You are in control.' : 'Small gestures mean a lot.'}</strong><small>{page === 'admin' ? (isSupabaseConfigured ? 'Changes are synced directly with Supabase Database & Storage.' : 'Changes are saved in this browser (Supabase not configured in .env).') : 'Simple, warm, and made for your people.'}</small></div>
     </motion.section>
     <div className="controls shell"><div className="count">{visible.length} payment QR{visible.length === 1 ? '' : 's'}</div><div className="filter-area"><div className="filters">{[['all', 'Everyone'], ['boc', 'BOC'], ['commercial', 'Commercial Bank'], ['other', 'Other']].map(([value, label]) => <button key={value} className={filter === value ? 'filter active' : 'filter'} onClick={() => setFilter(value)}>{label}</button>)}</div><div className="filters"><button className={nameFilter === 'all' ? 'filter active' : 'filter'} onClick={() => setNameFilter('all')}>All names</button>{names.map(name => <button key={name} className={nameFilter === name ? 'filter active' : 'filter'} onClick={() => setNameFilter(name)}>{name}</button>)}</div></div></div>
     {page === 'viewer' ? <PeopleDirectory people={visible} selectedName={selectedPersonName} onSelectName={name => setSelectedPersonName(selectedPersonName === name ? null : name)} onSelectBank={setSelected} /> : <main className="shell grid">{visible.map((person, index) => <PersonCard key={`${person.name}-${person.bank}-${index}`} person={person} canManage onOpen={() => setSelected(person)} onEdit={() => setEditing(person)} onDelete={() => deletePerson(person)} />)}</main>}
-    <footer>Made with care for your circle of friends · {isAdmin ? 'Admin changes stay saved in this browser' : 'Viewer access is read-only'}</footer>
+    <footer>Made with care for your circle of friends · {isSupabaseConfigured ? 'Synced with Supabase Backend' : 'Admin changes stay saved in this browser'} · {isAdmin ? 'Admin session active' : 'Viewer access is read-only'}</footer>
     {selected && <QrModal person={selected} onClose={() => setSelected(null)} />}
-    {showAdd && <QrFormModal title="Add a friend QR" onClose={() => setShowAdd(false)} onSubmit={event => savePerson(event)} />}
-    {editing && <QrFormModal title="Edit QR code" person={editing} onClose={() => setEditing(null)} onSubmit={event => savePerson(event, editing)} />}
+    {showAdd && <QrFormModal title="Add a friend QR" isSaving={isSaving} onClose={() => setShowAdd(false)} onSubmit={event => savePerson(event)} />}
+    {editing && <QrFormModal title="Edit QR code" isSaving={isSaving} person={editing} onClose={() => setEditing(null)} onSubmit={event => savePerson(event, editing)} />}
     {showLogin && <LoginModal onClose={() => setShowLogin(false)} onSuccess={() => { setIsAdmin(true); setPage('admin'); setShowLogin(false) }} />}
   </DotBackground>
 }
@@ -186,7 +295,7 @@ function PeopleDirectory({ people, selectedName, onSelectName, onSelectBank }) {
 }
 function PersonCard({ person, canManage, onOpen, onEdit, onDelete }) { return <motion.article className="person" initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} whileHover={{ y: -5 }} transition={{ duration: .3 }}><div className="person-top"><div className="avatar">{initials(person.name)}</div><div><h2>{person.name}</h2><div className="sub">{person.bank}</div></div><span className="badge">{person.custom ? 'ADDED' : 'FRIEND'}</span></div><ElectroBorder className="qr-electro" borderColor="#82f4ca" borderWidth={2} distortion={1.35} animationSpeed={1.2} glowBlur={22}><div className="qr-wrap"><img loading="lazy" src={imageFor(person)} alt={`${person.name}'s ${person.bank} QR code`} /></div></ElectroBorder>{(person.extraData || person.extraUrl) && <div className="extra"><img src={person.extraData || person.extraUrl} alt="" />Additional picture</div>}<div className="actions"><button className="btn primary" onClick={onOpen}><QrCode size={16} weight="bold" />Show QR</button><a className="btn quiet" href={imageFor(person)} download={person.file || `${person.name}-qr.png`}><DownloadSimple size={16} />Save</a>{canManage && person.custom && <><button className="btn quiet" onClick={onEdit}><PencilSimple size={16} />Edit</button><button className="btn danger" onClick={onDelete}><Trash size={16} />Delete</button></>}</div></motion.article> }
 function QrModal({ person, onClose }) { const src = imageFor(person); return <div className="overlay open" onClick={event => event.target === event.currentTarget && onClose()}><div className="modal qr-modal"><div className="modal-head"><strong>{person.name} · {person.bank}</strong><button className="close" onClick={onClose}><X size={20} /></button></div><ElectroBorder className="modal-qr-electro" borderColor="#00ffff" borderWidth={3} distortion={1.8} animationSpeed={1.5} glowBlur={40}><img src={src} alt={`${person.name}'s ${person.bank} QR code`} /></ElectroBorder><a className="btn primary full" href={src} download={person.file || `${person.name}-qr.png`}><DownloadSimple size={18} />Download QR image</a></div></div> }
-function QrFormModal({ title, person, onClose, onSubmit }) { return <div className="overlay open" onClick={event => event.target === event.currentTarget && onClose()}><form className="modal form" onSubmit={onSubmit}><div className="modal-head"><strong>{title}</strong><button type="button" className="close" onClick={onClose}>×</button></div><label>Name<input name="name" required defaultValue={person?.name || ''} placeholder="e.g. Sathu" /></label><label>Which bank?<input name="bank" required defaultValue={person?.bank || ''} placeholder="e.g. Bank of Ceylon" /></label><label>QR picture<input name="qr" type="file" accept="image/*" required={!person} /></label><label>Additional picture <span>(optional)</span><input name="extra" type="file" accept="image/*" /></label><div className="modal-actions"><button type="button" className="btn quiet" onClick={onClose}>Cancel</button><button className="btn primary">Save QR</button></div></form></div> }
+function QrFormModal({ title, person, onClose, onSubmit, isSaving = false }) { return <div className="overlay open" onClick={event => event.target === event.currentTarget && onClose()}><form className="modal form" onSubmit={onSubmit}><div className="modal-head"><strong>{title}</strong><button type="button" className="close" onClick={onClose}>×</button></div><label>Name<input name="name" required defaultValue={person?.name || ''} placeholder="e.g. Sathu" /></label><label>Which bank?<input name="bank" required defaultValue={person?.bank || ''} placeholder="e.g. Bank of Ceylon" /></label><label>QR picture<input name="qr" type="file" accept="image/*" required={!person} /></label><label>Additional picture <span>(optional)</span><input name="extra" type="file" accept="image/*" /></label><div className="modal-actions"><button type="button" className="btn quiet" disabled={isSaving} onClick={onClose}>Cancel</button><button className="btn primary" disabled={isSaving}>{isSaving ? 'Saving to Supabase...' : 'Save QR'}</button></div></form></div> }
 function LoginModal({ onClose, onSuccess }) { const [name, setName] = useState(''); const [error, setError] = useState(''); return <div className="overlay open" onClick={event => event.target === event.currentTarget && onClose()}><form className="modal form" onSubmit={event => { event.preventDefault(); if (name.trim().toLowerCase() === 'mee') onSuccess(); else setError('Only the admin account “mee” can open this page.') }}><div className="modal-head"><strong>Admin sign in</strong><button type="button" className="close" onClick={onClose}>×</button></div><p className="modal-copy">Enter the admin name to manage QR codes.</p><label>Admin name<input autoFocus value={name} onChange={event => setName(event.target.value)} placeholder="mee" required /></label>{error && <div className="form-error">{error}</div>}<div className="modal-actions"><button type="button" className="btn quiet" onClick={onClose}>Cancel</button><button className="btn primary">Open admin page</button></div></form></div> }
 
 export default App
